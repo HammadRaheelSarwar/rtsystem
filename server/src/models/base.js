@@ -27,57 +27,12 @@ function getNested(obj, path) {
 }
 
 function camelToSnakeKey(key) {
-  const customMap = {
-    _id: 'id',
-    createdBy: 'created_by_id',
-    currentDepartment: 'current_department_id',
-    assignedTo: 'assigned_to_id',
-    raisedBy: 'raised_by_id',
-    assignedDepartment: 'assigned_department_id',
-    preparedBy: 'prepared_by_id',
-    checkedBy: 'checked_by_id',
-    approvedBy: 'approved_by_id',
-    uploadedBy: 'uploaded_by_id',
-    reviewedBy: 'reviewed_by_id',
-    submittedBy: 'submitted_by_id',
-    assignedDesigner: 'assigned_designer_id',
-    proofDocument: 'proof_document_id',
-    authorizedSignatory: 'authorized_signatory_id',
-    recipient: 'recipient_id',
-    inquiryId: 'inquiry_id',
-    role: 'role_id',
-    department: 'department_id',
-    client: 'client_id',
-    inquiry: 'inquiry_id'
-  };
-  if (customMap[key]) return customMap[key];
+  if (key === '_id' || key === 'id') return 'id';
   return key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
 }
 
 function snakeToCamelKey(key) {
-  const customMap = {
-    id: '_id',
-    created_by_id: 'createdBy',
-    current_department_id: 'currentDepartment',
-    assigned_to_id: 'assignedTo',
-    raised_by_id: 'raisedBy',
-    assigned_department_id: 'assignedDepartment',
-    prepared_by_id: 'preparedBy',
-    checked_by_id: 'checkedBy',
-    approved_by_id: 'approvedBy',
-    uploaded_by_id: 'uploadedBy',
-    reviewed_by_id: 'reviewedBy',
-    submitted_by_id: 'submittedBy',
-    assigned_designer_id: 'assignedDesigner',
-    proof_document_id: 'proofDocument',
-    authorized_signatory_id: 'authorizedSignatory',
-    recipient_id: 'recipient',
-    inquiry_id: 'inquiry',
-    role_id: 'role',
-    department_id: 'department',
-    client_id: 'client'
-  };
-  if (customMap[key]) return customMap[key];
+  if (key === 'id') return '_id';
   return key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
@@ -100,7 +55,7 @@ export function toCamel(row, modelName) {
     const camelK = snakeToCamelKey(k);
     res[camelK] = v;
   }
-  if (modelName === 'User') {
+  if (modelName === 'User' || modelName === 'Profile') {
     res.comparePassword = async function (cand) {
       if (!this.password) return false;
       return bcrypt.compare(cand, this.password);
@@ -215,7 +170,7 @@ export class SupabaseModel {
     const now = new Date().toISOString();
     const docData = { ...data };
 
-    if (this.modelName === 'User' && docData.password && !docData.password.startsWith('$2')) {
+    if ((this.modelName === 'User' || this.modelName === 'Profile') && docData.password && !docData.password.startsWith('$2')) {
       docData.password = await bcrypt.hash(docData.password, 12);
     }
 
@@ -285,7 +240,7 @@ export class SupabaseModel {
       updatedFields = { ...update };
     }
 
-    if (this.modelName === 'User' && updatedFields.password && !updatedFields.password.startsWith('$2')) {
+    if ((this.modelName === 'User' || this.modelName === 'Profile') && updatedFields.password && !updatedFields.password.startsWith('$2')) {
       updatedFields.password = await bcrypt.hash(updatedFields.password, 12);
     }
 
@@ -449,20 +404,17 @@ export class SupabaseModel {
   async _fetchFromSupabase(query, filter) {
     let q = query;
     for (const [k, v] of Object.entries(filter)) {
+      const snakeKey = camelToSnakeKey(k);
       if (k === '_id' || k === 'id') {
         q = q.eq('id', v);
-      } else if (k === 'isDeleted') {
-        q = q.eq('is_deleted', v);
-      } else if (k === 'isActive') {
-        q = q.eq('is_active', v);
-      } else if (k === 'status') {
-        q = q.eq('status', v);
-      } else if (k === 'currentStatus') {
-        if (typeof v === 'object' && v.$nin) {
-          q = q.not('current_status', 'in', `(${v.$nin.map(x => `"${x}"`).join(',')})`);
-        } else {
-          q = q.eq('current_status', v);
+      } else if (typeof v === 'object' && v !== null) {
+        if (v.$nin) {
+          q = q.not(snakeKey, 'in', `(${v.$nin.map(x => `"${x}"`).join(',')})`);
+        } else if (v.$in) {
+          q = q.in(snakeKey, v.$in);
         }
+      } else {
+        q = q.eq(snakeKey, v);
       }
     }
 
