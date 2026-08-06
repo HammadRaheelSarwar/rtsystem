@@ -9,6 +9,7 @@
     "test": "cross-env NODE_ENV=test vitest run"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
     "bcryptjs": "^3.0.2",
     "compression": "^1.8.0",
     "cookie-parser": "^1.4.7",
@@ -16,11 +17,9 @@
     "dotenv": "^16.5.0",
     "exceljs": "^4.4.0",
     "express": "^5.1.0",
-    "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.15.1",
     "morgan": "^1.10.0",
     "multer": "^2.0.0",
     "nodemailer": "^9.0.4",
@@ -29,7 +28,6 @@
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
-    "mongodb-memory-server": "^10.1.4",
     "nodemon": "^3.1.10",
     "supertest": "^7.1.1",
     "vitest": "^3.2.0"

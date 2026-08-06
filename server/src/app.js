@@ -33,7 +33,6 @@ app.use(cors({
   credentials: true
 }));
 app.use(compression());app.use(cookieParser());app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true,limit:'2mb'}));if(process.env.NODE_ENV!=='test')app.use(morgan('combined'));
-app.use((req,res,next)=>{const clean=o=>{if(!o||typeof o!=='object')return;for(const k of Object.keys(o)){if(k.startsWith('$')||k.includes('.'))delete o[k];else clean(o[k]);}};clean(req.body);clean(req.params);next();});
 app.use('/api/auth',rateLimit({windowMs:15*60*1000,limit:100,standardHeaders:'draft-7',legacyHeaders:false}),authRoutes);
 app.get('/api/health',(req,res)=>res.json({success:true,status:'healthy',timestamp:new Date().toISOString()}));
 app.use('/api/users',userRoutes);app.use('/api/master',masterRouter);app.use('/api/clients',clientRoutes);app.use('/api/inquiries',inquiryRoutes);app.use('/api',workflowRoutes);app.use('/api',dashboardRoutes);app.use('/api',exportRoutes);

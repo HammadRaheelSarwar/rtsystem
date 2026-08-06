@@ -1,11 +1,23 @@
-import mongoose from 'mongoose';
+import { createClient } from '@supabase/supabase-js';
 
-export async function connectDB(uri = process.env.MONGODB_URI) {
-  if (!uri) {
-    throw new Error('MONGODB_URI environment variable is missing. Please define it in server/.env');
-  }
-  mongoose.set('strictQuery', true);
-  await mongoose.connect(uri);
-  return mongoose.connection;
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+
+let clientInstance = null;
+
+if (supabaseUrl && supabaseKey) {
+  clientInstance = createClient(supabaseUrl, supabaseKey, {
+    auth: { persistSession: false }
+  });
 }
 
+export const supabase = clientInstance;
+
+export async function connectDB() {
+  if (!process.env.SUPABASE_URL || (!process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_ANON_KEY)) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('WARNING: SUPABASE_URL / SUPABASE_ANON_KEY missing in environment variables.');
+    }
+  }
+  return supabase;
+}
