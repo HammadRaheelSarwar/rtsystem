@@ -30,7 +30,7 @@ async function run() {
   ];
   for (const [name, email, password, role, dept] of users) {
     if (!await User.exists({ email })) {
-      await User.create({ name, email, password, role: roleMap[role]._id, department: deptMap[dept]._id, isActive: true, isDeleted: false });
+      await User.create({ name, email, password, role: roleMap[role]._id, roleName: role, department: deptMap[dept]._id, isActive: true, isDeleted: false });
     }
   }
   const sales = await User.findOne({ email: 'sales@rt.com' });

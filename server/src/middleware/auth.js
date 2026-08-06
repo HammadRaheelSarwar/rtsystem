@@ -15,6 +15,7 @@ export const protect = asyncHandler(async (req, res, next) => {
   }
   const user = await User.findById(decoded.sub).populate('role department');
   if (!user || !user.isActive || user.isDeleted) throw new AppError('Account is inactive', 401, 'ACCOUNT_INACTIVE');
+  user.roleName ||= decoded.role;
   req.user = user;
 
   if (!req._auditAttached && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -38,7 +39,7 @@ export const protect = asyncHandler(async (req, res, next) => {
 });
 
 export const authorize = (...roles) => (req, res, next) => {
-  const userRoleName = typeof req.user.role === 'object' ? req.user.role.name : req.user.role;
+  const userRoleName = req.user.role?.name || req.user.roleName;
   if (!roles.includes(userRoleName)) return next(new AppError('You do not have permission for this action', 403, 'FORBIDDEN'));
   next();
 };

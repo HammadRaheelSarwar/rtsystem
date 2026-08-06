@@ -16,8 +16,9 @@ const jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || 'fallback-refresh-sec
 let seedPromise;
 
 function tokens(user) {
+  const role = user.role?.name || user.roleName;
   return {
-    accessToken: jwt.sign({ sub: user._id }, jwtAccessSecret, { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m' }),
+    accessToken: jwt.sign({ sub: user._id, role }, jwtAccessSecret, { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m' }),
     refreshToken: jwt.sign({ sub: user._id, jti: crypto.randomUUID() }, jwtRefreshSecret, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' })
   };
 }
@@ -52,16 +53,20 @@ async function seedAccounts() {
     ];
 
     for (const [name, email, password, role, dept] of users) {
-      if (!await User.exists({ email })) {
+      const existing = await User.findOne({ email });
+      if (!existing) {
         await User.create({
           name,
           email,
           password,
           role: roleMap[role]._id,
+          roleName: role,
           department: deptMap[dept]._id,
           isActive: true,
           isDeleted: false
         });
+      } else if (!existing.roleName) {
+        await User.findByIdAndUpdate(existing._id, { roleName: role, isActive: true, isDeleted: false });
       }
     }
   } catch (err) {
