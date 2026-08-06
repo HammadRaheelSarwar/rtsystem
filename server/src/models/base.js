@@ -152,6 +152,7 @@ export class SupabaseModel {
     this.modelName = modelName;
     this.tableName = tableName;
     this.relations = relations;
+    this.remoteAvailable = Boolean(supabase);
   }
 
   find(filter = {}) {
@@ -193,7 +194,7 @@ export class SupabaseModel {
       updated_at: now
     };
 
-    if (supabase) {
+    if (supabase && this.remoteAvailable) {
       const { data: inserted, error } = await supabase
         .from(this.tableName)
         .insert([payload])
@@ -201,6 +202,7 @@ export class SupabaseModel {
         .single();
 
       if (error) {
+        this._rememberSchemaFailure(error);
         return this._memoryCreate(payload);
       }
       return toCamel(inserted, this.modelName);
@@ -259,7 +261,7 @@ export class SupabaseModel {
     const payload = toSnake(updatedFields);
     payload.updated_at = new Date().toISOString();
 
-    if (supabase) {
+    if (supabase && this.remoteAvailable) {
       const { data: updated, error } = await supabase
         .from(this.tableName)
         .update(payload)
@@ -270,6 +272,7 @@ export class SupabaseModel {
       if (!error && updated) {
         return toCamel(updated, this.modelName);
       }
+      if (error) this._rememberSchemaFailure(error);
     }
 
     const mem = getMemoryTable(this.tableName);
@@ -365,7 +368,7 @@ export class SupabaseModel {
   async _executeQuery(chain) {
     let rows = [];
 
-    if (supabase) {
+    if (supabase && this.remoteAvailable) {
       try {
         let q = supabase.from(this.tableName).select('*');
         rows = await this._fetchFromSupabase(q, chain.filter);
@@ -434,9 +437,18 @@ export class SupabaseModel {
 
     const { data, error } = await q;
     if (error || !data) {
+      if (error) this._rememberSchemaFailure(error);
       return this._fetchFromMemory(filter);
     }
     return data;
+  }
+
+  _rememberSchemaFailure(error) {
+    // Schema errors are deterministic. Avoid paying for the same failed remote
+    // request on every operation in a warm serverless instance.
+    if (['PGRST204', 'PGRST205', '23502', '42703', '42P01'].includes(error?.code)) {
+      this.remoteAvailable = false;
+    }
   }
 
   _fetchFromMemory(filter) {

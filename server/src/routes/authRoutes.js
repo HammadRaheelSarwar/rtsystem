@@ -13,7 +13,25 @@ const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'productio
 const hash = v => crypto.createHash('sha256').update(v).digest('hex');
 const jwtAccessSecret = process.env.JWT_ACCESS_SECRET || 'fallback-access-secret-32-chars-long';
 const jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || 'fallback-refresh-secret-32-chars-long';
-let seedPromise;
+const accountSeedPromises = new Map();
+const departments = {
+  ADMIN: ['Administration', 'ADMIN'], SALES: ['Sales', 'SALES'], EST: ['Estimation', 'EST'],
+  DESIGN: ['Design', 'DESIGN'], GM: ['General Management', 'GM']
+};
+const roles = {
+  ADMIN: ['users.manage', 'settings.manage', 'inquiries.all', 'reports.view'],
+  SALES: ['clients.manage', 'inquiries.create', 'itf.manage', 'sales.submit', 'followups.manage'],
+  ESTIMATION: ['inquiries.review', 'jif.manage', 'costing.manage', 'proposals.manage'],
+  DESIGN: ['design.manage', 'dws.manage', 'queries.manage'],
+  GM: ['gm.review', 'gm.approve', 'inquiries.all', 'reports.view']
+};
+const demoAccounts = [
+  [process.env.ADMIN_NAME || 'System Administrator', (process.env.ADMIN_EMAIL || 'admin@rt.com').toLowerCase(), process.env.ADMIN_PASSWORD || '$2b$12$u54szes/mU4rek3iLKio7eshdugclPdYnmIBACtWYQLexqULcVd62', 'ADMIN', 'ADMIN'],
+  ['Sales Executive', 'sales@rt.com', '$2b$12$ymlnxig5dQUotm6j1bQvjezAAIOMh6KTyuwr9gNzOj/fvkHNObcS2', 'SALES', 'SALES'],
+  ['Estimator', 'estimation@rt.com', '$2b$12$lq/wmqyNd0xXuQQXT583FOf2y6vI3VBXb/Ac4nveuf9kodbqd8n.K', 'ESTIMATION', 'EST'],
+  ['Design Engineer', 'design@rt.com', '$2b$12$bR9FG5RH8mxs7LEC4AMt1uA0WzXmd8bqviRhvO4C.GooqgKg3p6TK', 'DESIGN', 'DESIGN'],
+  ['General Manager', 'gm@rt.com', '$2b$12$FJQGqFxXew3glpuRSqNL3eZjRfQg9rDNGbAosRChc.Q8dtW7BDDbS', 'GM', 'GM']
+];
 
 function tokens(user) {
   const role = user.role?.name || user.roleName;
@@ -23,67 +41,39 @@ function tokens(user) {
   };
 }
 
-async function seedAccounts() {
+async function seedAccount(email) {
   try {
-    const departments = [['Administration', 'ADMIN'], ['Sales', 'SALES'], ['Estimation', 'EST'], ['Design', 'DESIGN'], ['General Management', 'GM']];
-    const roles = {
-      ADMIN: ['users.manage', 'settings.manage', 'inquiries.all', 'reports.view'],
-      SALES: ['clients.manage', 'inquiries.create', 'itf.manage', 'sales.submit', 'followups.manage'],
-      ESTIMATION: ['inquiries.review', 'jif.manage', 'costing.manage', 'proposals.manage'],
-      DESIGN: ['design.manage', 'dws.manage', 'queries.manage'],
-      GM: ['gm.review', 'gm.approve', 'inquiries.all', 'reports.view']
-    };
-
-    const deptMap = {};
-    for (const [name, code] of departments) {
-      deptMap[code] = await Department.findOneAndUpdate({ code }, { $set: { name, code, isActive: true } }, { upsert: true, new: true });
-    }
-
-    const roleMap = {};
-    for (const [name, permissions] of Object.entries(roles)) {
-      roleMap[name] = await Role.findOneAndUpdate({ name }, { $set: { name, permissions, isActive: true } }, { upsert: true, new: true });
-    }
-
-    const users = [
-      [process.env.ADMIN_NAME || 'System Administrator', process.env.ADMIN_EMAIL || 'admin@rt.com', process.env.ADMIN_PASSWORD || 'ChangeMe123!', 'ADMIN', 'ADMIN'],
-      ['Sales Executive', 'sales@rt.com', 'Sales123!', 'SALES', 'SALES'],
-      ['Estimator', 'estimation@rt.com', 'Estimate123!', 'ESTIMATION', 'EST'],
-      ['Design Engineer', 'design@rt.com', 'Design123!', 'DESIGN', 'DESIGN'],
-      ['General Manager', 'gm@rt.com', 'Manager123!', 'GM', 'GM']
-    ];
-
-    for (const [name, email, password, role, dept] of users) {
-      const existing = await User.findOne({ email });
-      if (!existing) {
-        await User.create({
-          name,
-          email,
-          password,
-          role: roleMap[role]._id,
-          roleName: role,
-          department: deptMap[dept]._id,
-          isActive: true,
-          isDeleted: false
-        });
-      } else if (!existing.roleName) {
-        await User.findByIdAndUpdate(existing._id, { roleName: role, isActive: true, isDeleted: false });
-      }
+    const account = demoAccounts.find(item => item[1] === email);
+    if (!account) return;
+    const [name, accountEmail, password, roleName, departmentCode] = account;
+    const [departmentName, code] = departments[departmentCode];
+    const [department, role] = await Promise.all([
+      Department.findOneAndUpdate({ code }, { $set: { name: departmentName, code, isActive: true } }, { upsert: true, new: true }),
+      Role.findOneAndUpdate({ name: roleName }, { $set: { name: roleName, code: roleName, permissions: roles[roleName], isActive: true } }, { upsert: true, new: true })
+    ]);
+    const existing = await User.findOne({ email: accountEmail });
+    if (!existing) {
+      await User.create({ name, email: accountEmail, password, role: role._id, roleName, department: department._id, isActive: true, isDeleted: false });
+    } else if (!existing.roleName) {
+      await User.findByIdAndUpdate(existing._id, { roleName, isActive: true, isDeleted: false });
     }
   } catch (err) {
     console.warn('Auto-seed notice:', err.message);
   }
 }
 
-function ensureSeeded() {
-  // A serverless instance may receive simultaneous login requests. Reusing one
-  // seed operation prevents duplicate in-memory roles and dangling role IDs.
-  seedPromise ??= seedAccounts();
-  return seedPromise;
+function ensureAccount(email) {
+  if (!accountSeedPromises.has(email)) accountSeedPromises.set(email, seedAccount(email));
+  return accountSeedPromises.get(email);
 }
 
 router.post('/login', validate(z.object({ email: z.string().email(), password: z.string().min(8) })), asyncHandler(async (req, res) => {
-  await ensureSeeded();
-  const user = await User.findOne({ email: req.body.email.toLowerCase(), isDeleted: false }).select('+password').populate('role department');
+  const email = req.body.email.toLowerCase();
+  let user = await User.findOne({ email, isDeleted: false }).select('+password').populate('role department');
+  if (!user) {
+    await ensureAccount(email);
+    user = await User.findOne({ email, isDeleted: false }).select('+password').populate('role department');
+  }
   if (!user || !user.isActive || !(await user.comparePassword(req.body.password))) {
     throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
   }
