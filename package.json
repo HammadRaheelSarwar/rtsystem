@@ -10,7 +10,8 @@
     "dev": "concurrently \"npm run dev -w server\" \"npm run dev -w client\"",
     "build": "npm run build -w client",
     "test": "npm test -w server",
-    "seed": "npm run seed -w server"
+    "seed": "npm run seed -w server",
+    "migrate:normalized": "npm run migrate:normalized -w server"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

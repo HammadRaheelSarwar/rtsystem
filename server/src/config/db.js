@@ -12,7 +12,6 @@ if (supabaseUrl && supabaseKey) {
 }
 
 export const supabase = clientInstance;
-const recordsTable = process.env.SUPABASE_RECORDS_TABLE || 'app_records';
 
 export async function connectDB() {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -27,6 +26,10 @@ export async function persistenceStatus() {
   if (!supabase || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return { ready: false, code: 'SUPABASE_NOT_CONFIGURED' };
   }
-  const { error } = await supabase.from(recordsTable).select('id').limit(1);
-  return error ? { ready: false, code: error.code, message: error.message } : { ready: true, table: recordsTable };
+  const requiredTables = ['profiles', 'clients', 'inquiries'];
+  for (const table of requiredTables) {
+    const { error } = await supabase.from(table).select('id').limit(1);
+    if (error) return { ready: false, code: error.code, message: error.message, table };
+  }
+  return { ready: true, tables: requiredTables };
 }

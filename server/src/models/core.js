@@ -3,7 +3,7 @@ import { SupabaseModel, modelRegistry } from './base.js';
 export const Department = new SupabaseModel('Department', 'departments');
 export const Role = new SupabaseModel('Role', 'roles');
 
-export const User = new SupabaseModel('User', 'users', {
+export const User = new SupabaseModel('User', 'profiles', {
   role: 'Role',
   department: 'Department'
 });

@@ -19,10 +19,24 @@ describe('Supabase persistence contract', () => {
     expect(result.stdout).toContain('DATABASE_UNAVAILABLE');
   });
 
-  it('ships the required record-store migration', () => {
-    const sql = fs.readFileSync(new URL('../../docs/supabase_app_records.sql', import.meta.url), 'utf8');
-    expect(sql).toContain('CREATE TABLE IF NOT EXISTS public.app_records');
-    expect(sql).toContain('data JSONB NOT NULL');
-    expect(sql).toContain('TO service_role');
+  it('ships the normalized-table runtime migration', () => {
+    const sql = fs.readFileSync(new URL('../../docs/supabase_normalized_runtime.sql', import.meta.url), 'utf8');
+    expect(sql).toContain('ALTER TABLE public.profiles');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS public.system_settings');
+    expect(sql).toContain('Allow service role full access');
+  });
+
+  it('maps application client fields to relational columns', async () => {
+    const { toDatabaseRow } = await import('../src/models/base.js');
+    const row = toDatabaseRow('Client', 'clients', {
+      _id: '327f5b20-0d4a-45e3-873f-0e30b3b4598c',
+      clientCode: '45544',
+      companyName: 'izhar',
+      createdBy: '2fe2ae3f-0b7f-4556-a16f-918a935760ad'
+    });
+    expect(row.client_code).toBe('45544');
+    expect(row.company_name).toBe('izhar');
+    expect(row.created_by).toBe('2fe2ae3f-0b7f-4556-a16f-918a935760ad');
+    expect(row.metadata).toEqual({});
   });
 });

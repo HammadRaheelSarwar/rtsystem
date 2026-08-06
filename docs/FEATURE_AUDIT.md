@@ -21,7 +21,7 @@ Audit date: 2026-08-06
 
 ## Partial or deployment-dependent
 
-- Supabase persistence: implemented through the `app_records` JSONB table. The deployment must run `docs/supabase_app_records.sql` and configure `SUPABASE_SERVICE_ROLE_KEY` before the API will accept production writes.
+- Supabase persistence: implemented through the normalized relational schema plus `docs/supabase_normalized_runtime.sql`. Existing JSONB records can be migrated with `npm run migrate:normalized`; new writes go directly to their dedicated tables.
 - File persistence: implemented through the private Supabase Storage bucket configured by `SUPABASE_DOCUMENTS_BUCKET`. The API creates the bucket using the service-role key when the first document is uploaded.
 - Email: implemented when valid SMTP environment variables are configured.
 - Digital signatures: metadata fields exist, but certificate-backed signing is not implemented.

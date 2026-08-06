@@ -1,21 +1,20 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { supabase } from '../config/db.js';
+import { childSchemas, prepareDocument, schemaFor } from './schema.js';
 
-// In-memory fallback database for test environments or offline mode
 const memoryStore = new Map();
-const recordsTable = process.env.SUPABASE_RECORDS_TABLE || 'app_records';
 
 function serializable(value) {
   return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === 'function' ? undefined : item));
 }
 
-function databaseError(error) {
+function databaseError(error, table) {
   const err = new Error(error?.code === 'SUPABASE_NOT_CONFIGURED'
     ? 'SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for production persistence.'
     : error?.code === 'PGRST205'
-    ? `Supabase table "${recordsTable}" is missing. Run docs/supabase_app_records.sql in the Supabase SQL Editor.`
-    : `Supabase persistence failed: ${error?.message || 'Unknown database error'}`);
+      ? `Supabase table "${table}" is missing. Run docs/supabase_normalized_runtime.sql in the Supabase SQL Editor.`
+      : `Supabase persistence failed for "${table}": ${error?.message || 'Unknown database error'}`);
   err.status = 503;
   err.code = 'DATABASE_UNAVAILABLE';
   err.details = error?.code;
@@ -23,84 +22,114 @@ function databaseError(error) {
 }
 
 function getMemoryTable(tableName) {
-  if (!memoryStore.has(tableName)) {
-    memoryStore.set(tableName, []);
-  }
+  if (!memoryStore.has(tableName)) memoryStore.set(tableName, []);
   return memoryStore.get(tableName);
 }
 
 function getNested(obj, path) {
   if (!obj || !path) return undefined;
-  const parts = path.split('.');
-  let curr = obj;
-  for (const p of parts) {
-    if (curr && typeof curr === 'object') {
-      curr = curr[p];
-    } else {
-      return undefined;
-    }
-  }
-  return curr;
+  return path.split('.').reduce((curr, part) => curr && typeof curr === 'object' ? curr[part] : undefined, obj);
 }
 
-function camelToSnakeKey(key) {
-  if (key === '_id' || key === 'id') return 'id';
-  return key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
-}
-
-function snakeToCamelKey(key) {
-  if (key === 'id') return '_id';
+function snakeToCamel(key) {
   return key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
-export function toSnake(obj) {
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
-  const res = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (k === '_id' || k === 'id') continue;
-    const snakeK = camelToSnakeKey(k);
-    res[snakeK] = v;
-  }
-  return res;
+function cleanDocument(value) {
+  const copy = serializable(value || {});
+  for (const key of ['_id', 'id', '__v', 'save', 'comparePassword', 'toSafeObject', 'createdAt', 'updatedAt']) delete copy[key];
+  return copy;
 }
 
-export function toCamel(row, modelName) {
-  if (!row || typeof row !== 'object') return row;
-  const res = { _id: String(row.id || row._id || ''), id: String(row.id || row._id || '') };
-  for (const [k, v] of Object.entries(row)) {
-    if (k === 'id') continue;
-    const camelK = snakeToCamelKey(k);
-    res[camelK] = v;
+function encodeChildItem(spec, item, index, parentId) {
+  const source = item && typeof item === 'object' ? item : {};
+  const row = { [spec.foreignKey]: parentId };
+  const metadata = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined || ['id', '_id', 'createdAt', 'updatedAt'].includes(key)) continue;
+    const column = spec.columns[key];
+    if (column) row[column] = serializable(value);
+    else metadata[key] = serializable(value);
   }
-  res.save = async function () {
-    const model = modelRegistry[modelName];
-    if (model) {
-      const updated = await model.findByIdAndUpdate(this._id, this);
-      if (updated) {
-        Object.assign(this, updated);
-      }
-      return this;
+  if ('sortOrder' in spec.columns && row.sort_order === undefined) row.sort_order = index;
+  row.metadata = metadata;
+  return row;
+}
+
+function decodeChildItem(spec, row) {
+  const reverse = Object.fromEntries(Object.entries(spec.columns).map(([app, db]) => [db, app]));
+  const item = { ...(row.metadata || {}) };
+  for (const [key, value] of Object.entries(row)) {
+    if (['id', spec.foreignKey, 'metadata', 'created_at', 'updated_at'].includes(key)) continue;
+    item[reverse[key] || snakeToCamel(key)] = value;
+  }
+  if (row.id) { item._id = String(row.id); item.id = String(row.id); }
+  return item;
+}
+
+export function toDatabaseRow(modelName, fallbackTable, value, id = value?._id || value?.id || crypto.randomUUID()) {
+  const schema = schemaFor(modelName, fallbackTable);
+  const doc = prepareDocument(modelName, cleanDocument(value));
+  const row = { id: String(id) };
+  const metadata = {};
+
+  for (const [key, item] of Object.entries(doc)) {
+    if (item === undefined || typeof item === 'function') continue;
+    const column = schema.columns[key];
+    if (column) {
+      const normalized = column.endsWith('_id') && item && typeof item === 'object'
+        ? (item._id || item.id || item.Id || null)
+        : item;
+      row[column] = serializable(normalized);
     }
+    else metadata[key] = serializable(item);
+  }
+
+  row.metadata = metadata;
+  if (value?.createdAt || value?.created_at) row.created_at = new Date(value.createdAt || value.created_at).toISOString();
+  row.updated_at = new Date(value?.updatedAt || value?.updated_at || Date.now()).toISOString();
+  return row;
+}
+
+export function fromDatabaseRow(modelName, fallbackTable, row) {
+  if (!row) return null;
+  const schema = schemaFor(modelName, fallbackTable);
+  const reverse = Object.fromEntries(Object.entries(schema.columns).map(([app, db]) => [db, app]));
+  const result = { ...(row.metadata || {}), _id: String(row.id), id: String(row.id) };
+
+  for (const [key, value] of Object.entries(row)) {
+    if (['id', 'metadata', 'created_at', 'updated_at'].includes(key) || value === undefined) continue;
+    result[reverse[key] || snakeToCamel(key)] = value;
+  }
+  result.createdAt = row.created_at;
+  result.updatedAt = row.updated_at || row.created_at;
+  if (modelName === 'Client' || modelName === 'Inquiry') result.isDeleted = Boolean(result.isDeleted || row.deleted_at);
+  return decorate(result, modelName);
+}
+
+export const toSnake = value => value;
+export const toCamel = (row, modelName) => fromDatabaseRow(modelName, modelRegistry[modelName]?.tableName || '', row);
+
+function decorate(result, modelName) {
+  result.save = async function () {
+    const model = modelRegistry[modelName];
+    if (!model) return this;
+    const updated = await model.findByIdAndUpdate(this._id, this);
+    if (updated) Object.assign(this, updated);
     return this;
   };
+
   if (modelName === 'User' || modelName === 'Profile') {
-    res.comparePassword = async function (cand) {
-      if (!this.password) return false;
-      return bcrypt.compare(cand, this.password);
+    result.comparePassword = async function (candidate) {
+      return Boolean(this.password) && bcrypt.compare(candidate, this.password);
     };
-    res.toSafeObject = function () {
+    result.toSafeObject = function () {
       const copy = { ...this };
-      delete copy.password;
-      delete copy.refreshTokens;
-      delete copy.passwordResetToken;
-      delete copy.passwordResetExpires;
-      delete copy.comparePassword;
-      delete copy.toSafeObject;
-      delete copy.save;
+      for (const key of ['password', 'refreshTokens', 'passwordResetToken', 'passwordResetExpires', 'comparePassword', 'toSafeObject', 'save']) delete copy[key];
       return copy;
     };
   }
-  return res;
+  return result;
 }
 
 class QueryChain {
@@ -115,410 +144,227 @@ class QueryChain {
     this._selectFields = null;
     this._lean = false;
   }
-
-  skip(n) {
-    this._skip = n;
-    return this;
-  }
-
-  limit(n) {
-    this._limit = n;
-    return this;
-  }
-
-  sort(sortObj) {
-    this._sort = sortObj;
-    return this;
-  }
-
+  skip(value) { this._skip = value; return this; }
+  limit(value) { this._limit = value; return this; }
+  sort(value) { this._sort = value; return this; }
   populate(fields) {
-    if (typeof fields === 'string') {
-      const parts = fields.split(' ').filter(Boolean);
-      this._populateFields.push(...parts);
-    } else if (Array.isArray(fields)) {
-      this._populateFields.push(...fields);
-    }
+    if (typeof fields === 'string') this._populateFields.push(...fields.split(' ').filter(Boolean));
+    else if (Array.isArray(fields)) this._populateFields.push(...fields);
     return this;
   }
-
-  select(s) {
-    this._selectFields = s;
-    return this;
-  }
-
-  lean() {
-    this._lean = true;
-    return this;
-  }
-
-  async execute() {
-    return this.model._executeQuery(this);
-  }
-
-  then(resolve, reject) {
-    return this.execute().then(resolve, reject);
-  }
-
-  catch(reject) {
-    return this.execute().catch(reject);
-  }
+  select(value) { this._selectFields = value; return this; }
+  lean() { this._lean = true; return this; }
+  execute() { return this.model._executeQuery(this); }
+  then(resolve, reject) { return this.execute().then(resolve, reject); }
+  catch(reject) { return this.execute().catch(reject); }
 }
 
 export class SupabaseModel {
   constructor(modelName, tableName, relations = {}) {
     this.modelName = modelName;
-    this.tableName = tableName;
+    this.schema = schemaFor(modelName, tableName);
+    this.tableName = this.schema.table;
+    this.sourceCollection = this.schema.sourceCollection || tableName;
     this.relations = relations;
   }
 
-  find(filter = {}) {
-    return new QueryChain(this, filter, false);
-  }
+  find(filter = {}) { return new QueryChain(this, filter, false); }
+  findOne(filter = {}) { return new QueryChain(this, filter, true); }
+  findById(id) { return new QueryChain(this, { _id: id || 'non-existent' }, true); }
+  async countDocuments(filter = {}) { return (await this.find(filter)).length; }
+  async exists(filter = {}) { return Boolean(await this.findOne(filter)); }
 
-  findOne(filter = {}) {
-    return new QueryChain(this, filter, true);
-  }
-
-  findById(id) {
-    if (!id) return new QueryChain(this, { _id: 'non-existent' }, true);
-    return new QueryChain(this, { _id: id }, true);
-  }
-
-  async countDocuments(filter = {}) {
-    const items = await this.find(filter);
-    return items.length;
-  }
-
-  async exists(filter = {}) {
-    const item = await this.findOne(filter);
-    return Boolean(item);
-  }
-
-  async create(data) {
-    const id = data._id || data.id || crypto.randomUUID();
+  async create(input) {
+    const id = String(input?._id || input?.id || crypto.randomUUID());
     const now = new Date().toISOString();
-    const docData = { ...data };
-
-    if ((this.modelName === 'User' || this.modelName === 'Profile') && docData.password && !docData.password.startsWith('$2')) {
-      docData.password = await bcrypt.hash(docData.password, 12);
+    const doc = { ...input, _id: id, id, createdAt: input?.createdAt || now, updatedAt: now };
+    if ((this.modelName === 'User' || this.modelName === 'Profile') && doc.password && !doc.password.startsWith('$2')) {
+      doc.password = await bcrypt.hash(doc.password, 12);
     }
 
-    const payload = {
-      id,
-      ...toSnake(docData),
-      created_at: now,
-      updated_at: now
-    };
-
-    if (supabase) {
-      const record = serializable({ ...docData, _id: String(id), id: String(id), createdAt: now, updatedAt: now });
-      const { data: inserted, error } = await supabase
-        .from(recordsTable)
-        .insert([{ id, collection: this.tableName, data: record, created_at: now, updated_at: now }])
-        .select()
-        .single();
-
-      if (error) throw databaseError(error);
-      return toCamel(inserted.data, this.modelName);
+    if (!supabase) {
+      if (process.env.NODE_ENV === 'production') throw databaseError({ code: 'SUPABASE_NOT_CONFIGURED' }, this.tableName);
+      getMemoryTable(this.tableName).push(serializable(doc));
+      return decorate(serializable(doc), this.modelName);
     }
 
-    if (process.env.NODE_ENV === 'production') throw databaseError({ code: 'SUPABASE_NOT_CONFIGURED' });
-
-    return this._memoryCreate(payload);
+    const row = toDatabaseRow(this.modelName, this.tableName, doc, id);
+    row.created_at = doc.createdAt;
+    const { data, error } = await supabase.from(this.tableName).insert([row]).select().single();
+    if (error) throw databaseError(error, this.tableName);
+    const created = fromDatabaseRow(this.modelName, this.tableName, data);
+    await this._syncChildren(created);
+    return this._loadChildren(created);
   }
 
-  _memoryCreate(payload) {
-    if (process.env.NODE_ENV === 'production') throw databaseError({ code: 'SUPABASE_NOT_CONFIGURED' });
-    const mem = getMemoryTable(this.tableName);
-    mem.push(payload);
-    return toCamel(payload, this.modelName);
-  }
-
-  async insertMany(arr) {
+  async insertMany(items) {
     const results = [];
-    for (const item of arr) {
-      results.push(await this.create(item));
-    }
+    for (const item of items) results.push(await this.create(item));
     return results;
   }
 
-  async findByIdAndUpdate(id, update, options = {}) {
-    return this.findOneAndUpdate({ _id: id }, update, options);
-  }
+  findByIdAndUpdate(id, update, options = {}) { return this.findOneAndUpdate({ _id: id }, update, options); }
 
   async findOneAndUpdate(filter, update, options = {}) {
     const existing = await this.findOne(filter);
-
     if (!existing) {
-      if (options.upsert) {
-        const createData = { ...filter };
-        if (update.$set) Object.assign(createData, update.$set);
-        if (update.$setOnInsert) Object.assign(createData, update.$setOnInsert);
-        if (!update.$set && !update.$setOnInsert) Object.assign(createData, update);
-        return this.create(createData);
-      }
-      return null;
+      if (!options.upsert) return null;
+      const createData = { ...filter };
+      if (update.$set) Object.assign(createData, update.$set);
+      if (update.$setOnInsert) Object.assign(createData, update.$setOnInsert);
+      if (!update.$set && !update.$setOnInsert) Object.assign(createData, update);
+      delete createData._id;
+      return this.create(createData);
     }
 
-    let updatedFields = {};
-    if (update.$set) {
-      Object.assign(updatedFields, update.$set);
-    } else if (update.$inc) {
-      for (const [k, v] of Object.entries(update.$inc)) {
-        updatedFields[k] = (existing[k] || 0) + v;
-      }
-    } else {
-      updatedFields = { ...update };
-    }
+    const updatedFields = {};
+    if (update.$set) Object.assign(updatedFields, update.$set);
+    else if (update.$inc) {
+      for (const [key, value] of Object.entries(update.$inc)) updatedFields[key] = (existing[key] || 0) + value;
+    } else Object.assign(updatedFields, update);
 
     if ((this.modelName === 'User' || this.modelName === 'Profile') && updatedFields.password && !updatedFields.password.startsWith('$2')) {
       updatedFields.password = await bcrypt.hash(updatedFields.password, 12);
     }
+    const merged = { ...cleanDocument(existing), ...updatedFields, _id: existing._id, id: existing._id, createdAt: existing.createdAt, updatedAt: new Date().toISOString() };
 
-    const payload = toSnake(updatedFields);
-    payload.updated_at = new Date().toISOString();
-
-    if (supabase) {
-      const merged = serializable({ ...existing, ...updatedFields, _id: existing._id, id: existing._id, createdAt: existing.createdAt, updatedAt: payload.updated_at });
-      const { data: updated, error } = await supabase
-        .from(recordsTable)
-        .update({ data: merged, updated_at: payload.updated_at })
-        .eq('collection', this.tableName)
-        .eq('id', existing._id)
-        .select()
-        .single();
-
-      if (error) throw databaseError(error);
-      return toCamel(updated.data, this.modelName);
+    if (!supabase) {
+      const table = getMemoryTable(this.tableName);
+      const index = table.findIndex(item => item._id === existing._id);
+      if (index >= 0) table[index] = serializable(merged);
+      return decorate(serializable(merged), this.modelName);
     }
 
-    const mem = getMemoryTable(this.tableName);
-    const idx = mem.findIndex(r => r.id === existing._id);
-    if (idx !== -1) {
-      mem[idx] = { ...mem[idx], ...payload };
-      return toCamel(mem[idx], this.modelName);
-    }
-
-    return { ...existing, ...updatedFields };
+    const row = toDatabaseRow(this.modelName, this.tableName, merged, existing._id);
+    delete row.id;
+    delete row.created_at;
+    const { data, error } = await supabase.from(this.tableName).update(row).eq('id', existing._id).select().single();
+    if (error) throw databaseError(error, this.tableName);
+    const saved = fromDatabaseRow(this.modelName, this.tableName, data);
+    await this._syncChildren(saved);
+    return this._loadChildren(saved);
   }
 
   async updateMany(filter, update) {
     const items = await this.find(filter);
-    for (const item of items) {
-      await this.findByIdAndUpdate(item._id, update);
-    }
+    for (const item of items) await this.findByIdAndUpdate(item._id, update);
     return { modifiedCount: items.length };
   }
 
   async aggregate(pipeline = []) {
-    const allItems = await this.find({});
-    let results = [...allItems];
-
+    let results = [...await this.find({})];
     for (const stage of pipeline) {
-      if (stage.$match) {
-        results = results.filter(r => this._matchesFilter(r, stage.$match));
-      } else if (stage.$group) {
-        const groupField = stage.$group._id ? String(stage.$group._id).replace('$', '') : null;
-        const groups = {};
-
-        for (const item of results) {
-          const key = groupField ? (item[groupField] ?? null) : null;
-          const kStr = String(key);
-          if (!groups[kStr]) groups[kStr] = [];
-          groups[kStr].push(item);
-        }
-
-        const aggregated = [];
-        for (const [key, items] of Object.entries(groups)) {
-          const groupRes = { _id: key === 'null' ? null : key };
-          for (const [outField, op] of Object.entries(stage.$group)) {
-            if (outField === '_id') continue;
-            if (op.$sum === 1) {
-              groupRes[outField] = items.length;
-            } else if (typeof op.$sum === 'string') {
-              const fieldPath = op.$sum.replace('$', '');
-              groupRes[outField] = items.reduce((sum, item) => sum + (Number(getNested(item, fieldPath)) || 0), 0);
-            } else if (typeof op.$avg === 'string') {
-              const fieldPath = op.$avg.replace('$', '');
-              const sum = items.reduce((s, item) => s + (Number(getNested(item, fieldPath)) || 0), 0);
-              groupRes[outField] = items.length ? sum / items.length : 0;
-            }
+      if (stage.$match) results = results.filter(item => this._matchesFilter(item, stage.$match));
+      else if (stage.$group) {
+        const field = stage.$group._id ? String(stage.$group._id).replace('$', '') : null;
+        const groups = Object.groupBy(results, item => String(field ? item[field] ?? null : null));
+        results = Object.entries(groups).map(([key, items]) => {
+          const output = { _id: key === 'null' ? null : key };
+          for (const [name, operation] of Object.entries(stage.$group)) {
+            if (name === '_id') continue;
+            if (operation.$sum === 1) output[name] = items.length;
+            else if (typeof operation.$sum === 'string') output[name] = items.reduce((sum, item) => sum + (Number(getNested(item, operation.$sum.replace('$', ''))) || 0), 0);
+            else if (typeof operation.$avg === 'string') output[name] = items.length ? items.reduce((sum, item) => sum + (Number(getNested(item, operation.$avg.replace('$', ''))) || 0), 0) / items.length : 0;
           }
-          aggregated.push(groupRes);
-        }
-        results = aggregated;
-      } else if (stage.$lookup) {
-        const { from, localField, foreignField, as } = stage.$lookup;
-        const localKey = localField.replace('$', '').replace(/^_id$/, 'id');
-        const targetModel = Object.values(modelRegistry).find(m => m.tableName === from || m.modelName.toLowerCase() === from.toLowerCase());
-        if (targetModel) {
-          const foreignItems = await targetModel.find({});
-          for (const item of results) {
-            const matching = foreignItems.filter(f => String(f[foreignField] || f.inquiry || '') === String(item[localKey] || item._id || ''));
-            item[as] = matching;
-          }
-        } else {
-          for (const item of results) {
-            item[as] = [];
-          }
-        }
-      } else if (stage.$unwind) {
-        const path = typeof stage.$unwind === 'string' ? stage.$unwind.replace('$', '') : stage.$unwind.path.replace('$', '');
-        const preserve = typeof stage.$unwind === 'object' && stage.$unwind.preserveNullAndEmptyArrays;
-        const unwound = [];
-        for (const item of results) {
-          const arr = item[path];
-          if (Array.isArray(arr) && arr.length > 0) {
-            for (const elem of arr) {
-              unwound.push({ ...item, [path]: elem });
-            }
-          } else if (preserve) {
-            unwound.push({ ...item, [path]: null });
-          }
-        }
-        results = unwound;
+          return output;
+        });
       }
     }
     return results;
   }
 
   async _executeQuery(chain) {
-    let rows = [];
-
-    if (supabase) {
-      try {
-        let q = supabase.from(recordsTable).select('id,data,created_at,updated_at').eq('collection', this.tableName);
-        const id = chain.filter?._id || chain.filter?.id;
-        if (id) q = q.eq('id', id);
-        const { data, error } = await q;
-        if (error) throw databaseError(error);
-        rows = (data || []).map(row => ({ ...row.data, _id: String(row.id), id: String(row.id), createdAt: row.data?.createdAt || row.created_at, updatedAt: row.data?.updatedAt || row.updated_at }));
-      } catch (err) {
-        if (err?.code === 'DATABASE_UNAVAILABLE') throw err;
-        throw databaseError(err);
-      }
+    let records;
+    if (!supabase) {
+      if (process.env.NODE_ENV === 'production') throw databaseError({ code: 'SUPABASE_NOT_CONFIGURED' }, this.tableName);
+      records = getMemoryTable(this.tableName).map(item => decorate(serializable(item), this.modelName));
     } else {
-      if (process.env.NODE_ENV === 'production') throw databaseError({ code: 'SUPABASE_NOT_CONFIGURED' });
-      rows = this._fetchFromMemory(chain.filter);
+      const { data, error } = await supabase.from(this.tableName).select('*');
+      if (error) throw databaseError(error, this.tableName);
+      records = (data || []).map(row => fromDatabaseRow(this.modelName, this.tableName, row));
+      for (const record of records) await this._loadChildren(record);
     }
 
-    let records = rows.map(r => toCamel(r, this.modelName));
-
-    records = records.filter(r => this._matchesFilter(r, chain.filter));
-
+    records = records.filter(item => this._matchesFilter(item, chain.filter));
     if (chain._sort) {
-      const [[field, dir]] = Object.entries(chain._sort);
-      records.sort((a, b) => {
-        const valA = a[field] ?? '';
-        const valB = b[field] ?? '';
-        if (valA < valB) return dir === -1 || dir === 'desc' ? 1 : -1;
-        if (valA > valB) return dir === -1 || dir === 'desc' ? -1 : 1;
-        return 0;
-      });
+      const [[field, direction]] = Object.entries(chain._sort);
+      records.sort((a, b) => a[field] < b[field] ? (direction === -1 || direction === 'desc' ? 1 : -1) : a[field] > b[field] ? (direction === -1 || direction === 'desc' ? -1 : 1) : 0);
     }
-
-    if (chain._skip) {
-      records = records.slice(chain._skip);
+    if (chain._skip) records = records.slice(chain._skip);
+    if (chain._limit !== null) records = records.slice(0, chain._limit);
+    if (chain._populateFields.length) {
+      for (const record of records) for (const field of chain._populateFields) await this._populateRecordField(record, field);
     }
-    if (chain._limit) {
-      records = records.slice(0, chain._limit);
-    }
-
-    if (chain._populateFields.length > 0) {
-      for (const record of records) {
-        for (const pop of chain._populateFields) {
-          await this._populateRecordField(record, pop);
-        }
-      }
-    }
-
-    if (chain.single) {
-      return records[0] || null;
-    }
-
-    return records;
-  }
-
-  _fetchFromMemory(filter) {
-    const mem = getMemoryTable(this.tableName);
-    return mem.filter(row => {
-      const camel = toCamel(row, this.modelName);
-      return this._matchesFilter(camel, filter);
-    });
+    return chain.single ? records[0] || null : records;
   }
 
   _matchesFilter(item, filter) {
-    for (const [k, v] of Object.entries(filter)) {
-      if (k === '$text') continue;
-      const itemVal = item[k];
-
-      if (k === 'isDeleted' && v === false) {
-        if (itemVal === true) return false;
-        continue;
-      }
-      if (k === 'isActive' && v === true) {
-        if (itemVal === false) return false;
-        continue;
-      }
-
-      if (v && typeof v === 'object') {
-        if (v.$regex) {
-          const reg = new RegExp(v.$regex, 'i');
-          if (!reg.test(itemVal || '')) return false;
-        }
-        if (v.$nin) {
-          if (v.$nin.includes(itemVal)) return false;
-        }
-        if (v.$in) {
-          if (!v.$in.includes(itemVal)) return false;
-        }
-        if (v.$gte || v.$lte) {
-          const d = new Date(itemVal);
-          if (v.$gte && d < new Date(v.$gte)) return false;
-          if (v.$lte && d > new Date(v.$lte)) return false;
-        }
-        if (v.$ne !== undefined) {
-          if (itemVal === v.$ne) return false;
-        }
-      } else if (itemVal !== v) {
-        if ((k === '_id' || k === 'id') && String(itemVal) === String(v)) {
-          continue;
-        }
-        if (typeof itemVal === 'string' && typeof v === 'string' && itemVal.toLowerCase() === v.toLowerCase()) {
-          continue;
-        }
-        return false;
-      }
+    for (const [key, expected] of Object.entries(filter || {})) {
+      if (key === '$text') continue;
+      const actual = item[key];
+      if (key === 'isDeleted' && expected === false) { if (actual === true) return false; continue; }
+      if (key === 'isActive' && expected === true) { if (actual === false) return false; continue; }
+      if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
+        if (expected.$regex && !new RegExp(expected.$regex, 'i').test(actual || '')) return false;
+        if (expected.$nin && expected.$nin.includes(actual)) return false;
+        if (expected.$in && !expected.$in.map(String).includes(String(actual))) return false;
+        if (expected.$gte && new Date(actual) < new Date(expected.$gte)) return false;
+        if (expected.$lte && new Date(actual) > new Date(expected.$lte)) return false;
+        if (expected.$ne !== undefined && actual === expected.$ne) return false;
+      } else if (String(actual ?? '').toLowerCase() !== String(expected ?? '').toLowerCase()) return false;
     }
     return true;
   }
 
-  async _populateRecordField(record, fieldDef) {
-    let fieldName = typeof fieldDef === 'string' ? fieldDef : fieldDef.path;
-    let selectFields = typeof fieldDef === 'object' ? fieldDef.select : null;
+  async _populateRecordField(record, fieldDefinition) {
+    const field = typeof fieldDefinition === 'string' ? fieldDefinition : fieldDefinition.path;
+    const select = typeof fieldDefinition === 'object' ? fieldDefinition.select : null;
+    const target = modelRegistry[this.relations[field]];
+    if (!target || !record[field] || typeof record[field] === 'object') return;
+    const referenced = await target.findById(record[field]);
+    if (!referenced) return;
+    if (!select) record[field] = referenced;
+    else record[field] = Object.fromEntries(select.split(' ').filter(Boolean).map(key => [key, referenced[key]]));
+  }
 
-    const relModelName = this.relations[fieldName];
-    if (!relModelName) return;
+  async _syncChildren(document) {
+    const specs = childSchemas[this.modelName] || [];
+    if (!supabase || !specs.length) return;
+    for (const spec of specs) {
+      let value = document[spec.source];
+      if (value === undefined) continue;
+      let items;
+      if (spec.objectAsLocations) {
+        items = Object.entries(value || {}).map(([location, conditionDescription]) => ({ location, conditionDescription }));
+      } else if (spec.checklist) {
+        items = Object.entries(value || {}).map(([label, completed]) => spec.gmChecklist
+          ? { documentType: label, reviewStatus: completed ? 'COMPLETED' : 'PENDING' }
+          : { checklistCode: label.toUpperCase().replace(/[^A-Z0-9]+/g, '_'), checklistLabel: label, isCompleted: Boolean(completed) });
+      } else items = spec.single ? (value && Object.keys(value).length ? [value] : []) : (Array.isArray(value) ? value : []);
 
-    const refId = record[fieldName];
-    if (!refId || typeof refId === 'object') return;
-
-    const targetModel = modelRegistry[relModelName];
-    if (targetModel) {
-      const refDoc = await targetModel.findById(refId);
-      if (refDoc) {
-        if (selectFields) {
-          const selected = {};
-          const keys = selectFields.split(' ').filter(Boolean);
-          for (const k of keys) {
-            selected[k] = refDoc[k];
-          }
-          record[fieldName] = selected;
-        } else {
-          record[fieldName] = refDoc;
-        }
-      }
+      const { error: deleteError } = await supabase.from(spec.table).delete().eq(spec.foreignKey, document._id);
+      if (deleteError) throw databaseError(deleteError, spec.table);
+      if (!items.length) continue;
+      const rows = items.map((item, index) => encodeChildItem(spec, item, index, document._id));
+      const { error: insertError } = await supabase.from(spec.table).insert(rows);
+      if (insertError) throw databaseError(insertError, spec.table);
     }
+  }
+
+  async _loadChildren(document) {
+    const specs = childSchemas[this.modelName] || [];
+    if (!supabase || !specs.length) return document;
+    for (const spec of specs) {
+      const { data, error } = await supabase.from(spec.table).select('*').eq(spec.foreignKey, document._id);
+      if (error) throw databaseError(error, spec.table);
+      const items = (data || []).map(row => decodeChildItem(spec, row));
+      if (spec.objectAsLocations) document[spec.source] = Object.fromEntries(items.map(item => [item.location, item.conditionDescription]));
+      else if (spec.checklist) document[spec.source] = Object.fromEntries(items.map(item => spec.gmChecklist
+        ? [item.documentType, item.reviewStatus === 'COMPLETED']
+        : [item.checklistLabel, Boolean(item.isCompleted)]));
+      else document[spec.source] = spec.single ? items[0] || {} : items;
+    }
+    return document;
   }
 }
 
