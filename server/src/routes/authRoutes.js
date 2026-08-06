@@ -9,7 +9,7 @@ import { protect } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 
 const router=Router();
-const cookieBase={httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'strict',path:'/api/auth'};
+const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.COOKIE_SAME_SITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax'), path: '/api/auth' };
 const hash=v=>crypto.createHash('sha256').update(v).digest('hex');
 function tokens(user){ return {accessToken:jwt.sign({sub:user._id},process.env.JWT_ACCESS_SECRET,{expiresIn:process.env.JWT_ACCESS_EXPIRES_IN||'15m'}),refreshToken:jwt.sign({sub:user._id,jti:crypto.randomUUID()},process.env.JWT_REFRESH_SECRET,{expiresIn:process.env.JWT_REFRESH_EXPIRES_IN||'7d'})}; }
 
