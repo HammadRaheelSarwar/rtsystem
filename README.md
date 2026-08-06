@@ -18,7 +18,7 @@ A full-stack application built with React, Express, and Supabase for controlling
 - A Supabase Project ([app.supabase.com](https://app.supabase.com))
 
 ### 1. Database Setup
-Copy and run the DDL script from [docs/supabase_schema.sql](docs/supabase_schema.sql) in your Supabase project's **SQL Editor**.
+Run [docs/supabase_app_records.sql](docs/supabase_app_records.sql) in your Supabase project's **SQL Editor**. This creates the authoritative JSONB record store used by the API. The older normalized reference schema in [docs/supabase_schema.sql](docs/supabase_schema.sql) is retained as a domain reference but is not used by the runtime adapter.
 
 ### 2. Environment Configuration
 Copy `.env.example` to `.env` and fill in your Supabase credentials:
@@ -27,6 +27,8 @@ Copy `.env.example` to `.env` and fill in your Supabase credentials:
 SUPABASE_URL=https://<your-project-id>.supabase.co
 SUPABASE_ANON_KEY=<your-supabase-anon-key>
 SUPABASE_SERVICE_ROLE_KEY=<your-supabase-service-role-key>
+SUPABASE_RECORDS_TABLE=app_records
+SUPABASE_DOCUMENTS_BUCKET=documents
 JWT_ACCESS_SECRET=your-access-secret
 JWT_REFRESH_SECRET=your-refresh-secret
 ```
@@ -60,5 +62,5 @@ Runs Vitest test suites covering costing calculation snapshots, security & permi
 1. Connect your GitHub repository to Vercel.
 2. In **Project Settings**:
    - Set **Root Directory** to empty (`./`).
-   - Add Environment Variables: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`.
+   - Add Environment Variables: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_RECORDS_TABLE`, `SUPABASE_DOCUMENTS_BUCKET`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`.
 3. Deploy!

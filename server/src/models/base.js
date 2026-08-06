@@ -4,6 +4,23 @@ import { supabase } from '../config/db.js';
 
 // In-memory fallback database for test environments or offline mode
 const memoryStore = new Map();
+const recordsTable = process.env.SUPABASE_RECORDS_TABLE || 'app_records';
+
+function serializable(value) {
+  return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === 'function' ? undefined : item));
+}
+
+function databaseError(error) {
+  const err = new Error(error?.code === 'SUPABASE_NOT_CONFIGURED'
+    ? 'SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for production persistence.'
+    : error?.code === 'PGRST205'
+    ? `Supabase table "${recordsTable}" is missing. Run docs/supabase_app_records.sql in the Supabase SQL Editor.`
+    : `Supabase persistence failed: ${error?.message || 'Unknown database error'}`);
+  err.status = 503;
+  err.code = 'DATABASE_UNAVAILABLE';
+  err.details = error?.code;
+  return err;
+}
 
 function getMemoryTable(tableName) {
   if (!memoryStore.has(tableName)) {
@@ -152,7 +169,6 @@ export class SupabaseModel {
     this.modelName = modelName;
     this.tableName = tableName;
     this.relations = relations;
-    this.remoteAvailable = Boolean(supabase);
   }
 
   find(filter = {}) {
@@ -194,24 +210,25 @@ export class SupabaseModel {
       updated_at: now
     };
 
-    if (supabase && this.remoteAvailable) {
+    if (supabase) {
+      const record = serializable({ ...docData, _id: String(id), id: String(id), createdAt: now, updatedAt: now });
       const { data: inserted, error } = await supabase
-        .from(this.tableName)
-        .insert([payload])
+        .from(recordsTable)
+        .insert([{ id, collection: this.tableName, data: record, created_at: now, updated_at: now }])
         .select()
         .single();
 
-      if (error) {
-        this._rememberSchemaFailure(error);
-        return this._memoryCreate(payload);
-      }
-      return toCamel(inserted, this.modelName);
+      if (error) throw databaseError(error);
+      return toCamel(inserted.data, this.modelName);
     }
+
+    if (process.env.NODE_ENV === 'production') throw databaseError({ code: 'SUPABASE_NOT_CONFIGURED' });
 
     return this._memoryCreate(payload);
   }
 
   _memoryCreate(payload) {
+    if (process.env.NODE_ENV === 'production') throw databaseError({ code: 'SUPABASE_NOT_CONFIGURED' });
     const mem = getMemoryTable(this.tableName);
     mem.push(payload);
     return toCamel(payload, this.modelName);
@@ -261,18 +278,18 @@ export class SupabaseModel {
     const payload = toSnake(updatedFields);
     payload.updated_at = new Date().toISOString();
 
-    if (supabase && this.remoteAvailable) {
+    if (supabase) {
+      const merged = serializable({ ...existing, ...updatedFields, _id: existing._id, id: existing._id, createdAt: existing.createdAt, updatedAt: payload.updated_at });
       const { data: updated, error } = await supabase
-        .from(this.tableName)
-        .update(payload)
+        .from(recordsTable)
+        .update({ data: merged, updated_at: payload.updated_at })
+        .eq('collection', this.tableName)
         .eq('id', existing._id)
         .select()
         .single();
 
-      if (!error && updated) {
-        return toCamel(updated, this.modelName);
-      }
-      if (error) this._rememberSchemaFailure(error);
+      if (error) throw databaseError(error);
+      return toCamel(updated.data, this.modelName);
     }
 
     const mem = getMemoryTable(this.tableName);
@@ -368,14 +385,20 @@ export class SupabaseModel {
   async _executeQuery(chain) {
     let rows = [];
 
-    if (supabase && this.remoteAvailable) {
+    if (supabase) {
       try {
-        let q = supabase.from(this.tableName).select('*');
-        rows = await this._fetchFromSupabase(q, chain.filter);
+        let q = supabase.from(recordsTable).select('id,data,created_at,updated_at').eq('collection', this.tableName);
+        const id = chain.filter?._id || chain.filter?.id;
+        if (id) q = q.eq('id', id);
+        const { data, error } = await q;
+        if (error) throw databaseError(error);
+        rows = (data || []).map(row => ({ ...row.data, _id: String(row.id), id: String(row.id), createdAt: row.data?.createdAt || row.created_at, updatedAt: row.data?.updatedAt || row.updated_at }));
       } catch (err) {
-        rows = this._fetchFromMemory(chain.filter);
+        if (err?.code === 'DATABASE_UNAVAILABLE') throw err;
+        throw databaseError(err);
       }
     } else {
+      if (process.env.NODE_ENV === 'production') throw databaseError({ code: 'SUPABASE_NOT_CONFIGURED' });
       rows = this._fetchFromMemory(chain.filter);
     }
 
@@ -414,41 +437,6 @@ export class SupabaseModel {
     }
 
     return records;
-  }
-
-  async _fetchFromSupabase(query, filter) {
-    let q = query;
-    for (const [k, v] of Object.entries(filter)) {
-      const snakeKey = camelToSnakeKey(k);
-      if (k === '_id' || k === 'id') {
-        q = q.eq('id', v);
-      } else if (k === 'isDeleted' && v === false) {
-        q = q.or('is_deleted.eq.false,is_deleted.is.null');
-      } else if (typeof v === 'object' && v !== null) {
-        if (v.$nin) {
-          q = q.not(snakeKey, 'in', `(${v.$nin.map(x => `"${x}"`).join(',')})`);
-        } else if (v.$in) {
-          q = q.in(snakeKey, v.$in);
-        }
-      } else {
-        q = q.eq(snakeKey, v);
-      }
-    }
-
-    const { data, error } = await q;
-    if (error || !data) {
-      if (error) this._rememberSchemaFailure(error);
-      return this._fetchFromMemory(filter);
-    }
-    return data;
-  }
-
-  _rememberSchemaFailure(error) {
-    // Schema errors are deterministic. Avoid paying for the same failed remote
-    // request on every operation in a warm serverless instance.
-    if (['PGRST204', 'PGRST205', '23502', '42703', '42P01'].includes(error?.code)) {
-      this.remoteAvailable = false;
-    }
   }
 
   _fetchFromMemory(filter) {

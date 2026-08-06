@@ -14,6 +14,7 @@ import dashboardRoutes from './routes/dashboardRoutes.js';
 import exportRoutes from './routes/exportRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import {notFound,errorHandler} from './middleware/error.js';
+import {persistenceStatus} from './config/db.js';
 
 const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
   .split(',')
@@ -35,7 +36,7 @@ app.use(cors({
 }));
 app.use(compression());app.use(cookieParser());app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true,limit:'2mb'}));if(process.env.NODE_ENV!=='test')app.use(morgan('combined'));
 app.use(['/api/auth', '/auth'], authRoutes);
-app.get(['/api/health', '/health'], (req, res) => res.json({ success: true, status: 'healthy', timestamp: new Date().toISOString() }));
+app.get(['/api/health', '/health'], async (req, res) => {const database=await persistenceStatus();res.status(database.ready?200:503).json({success:database.ready,status:database.ready?'healthy':'degraded',database,timestamp:new Date().toISOString()});});
 app.use(['/api/users', '/users'], userRoutes);
 app.use(['/api/master', '/master'], masterRouter);
 app.use(['/api/clients', '/clients'], clientRoutes);

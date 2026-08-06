@@ -21,8 +21,8 @@ Audit date: 2026-08-06
 
 ## Partial or deployment-dependent
 
-- Supabase persistence: the checked-in normalized SQL schema and the document-style `SupabaseModel` adapter still use different field/table conventions. This must be reconciled before production data is reliable across Vercel function instances.
-- File persistence: Vercel temporary storage supports request processing but is not durable. Production documents require Supabase Storage, S3, Azure Blob Storage or Cloudinary.
+- Supabase persistence: implemented through the `app_records` JSONB table. The deployment must run `docs/supabase_app_records.sql` and configure `SUPABASE_SERVICE_ROLE_KEY` before the API will accept production writes.
+- File persistence: implemented through the private Supabase Storage bucket configured by `SUPABASE_DOCUMENTS_BUCKET`. The API creates the bucket using the service-role key when the first document is uploaded.
 - Email: implemented when valid SMTP environment variables are configured.
 - Digital signatures: metadata fields exist, but certificate-backed signing is not implemented.
 - Error logs: Vercel/runtime logs remain the operational source; the application audit log covers successful business actions.
