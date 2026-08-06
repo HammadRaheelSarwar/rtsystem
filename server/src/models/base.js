@@ -55,6 +55,17 @@ export function toCamel(row, modelName) {
     const camelK = snakeToCamelKey(k);
     res[camelK] = v;
   }
+  res.save = async function () {
+    const model = modelRegistry[modelName];
+    if (model) {
+      const updated = await model.findByIdAndUpdate(this._id, this);
+      if (updated) {
+        Object.assign(this, updated);
+      }
+      return this;
+    }
+    return this;
+  };
   if (modelName === 'User' || modelName === 'Profile') {
     res.comparePassword = async function (cand) {
       if (!this.password) return false;
@@ -68,6 +79,7 @@ export function toCamel(row, modelName) {
       delete copy.passwordResetExpires;
       delete copy.comparePassword;
       delete copy.toSafeObject;
+      delete copy.save;
       return copy;
     };
   }

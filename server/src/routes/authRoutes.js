@@ -11,12 +11,14 @@ import { validate } from '../middleware/validate.js';
 const router=Router();
 const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: process.env.COOKIE_SAME_SITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax'), path: '/api/auth' };
 const hash=v=>crypto.createHash('sha256').update(v).digest('hex');
-function tokens(user){ return {accessToken:jwt.sign({sub:user._id},process.env.JWT_ACCESS_SECRET,{expiresIn:process.env.JWT_ACCESS_EXPIRES_IN||'15m'}),refreshToken:jwt.sign({sub:user._id,jti:crypto.randomUUID()},process.env.JWT_REFRESH_SECRET,{expiresIn:process.env.JWT_REFRESH_EXPIRES_IN||'7d'})}; }
+const jwtAccessSecret = process.env.JWT_ACCESS_SECRET || 'fallback-access-secret-32-chars-long';
+const jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || 'fallback-refresh-secret-32-chars-long';
+function tokens(user){ return {accessToken:jwt.sign({sub:user._id},jwtAccessSecret,{expiresIn:process.env.JWT_ACCESS_EXPIRES_IN||'15m'}),refreshToken:jwt.sign({sub:user._id,jti:crypto.randomUUID()},jwtRefreshSecret,{expiresIn:process.env.JWT_REFRESH_EXPIRES_IN||'7d'})}; }
 
 router.post('/login',validate(z.object({email:z.string().email(),password:z.string().min(8)})),asyncHandler(async(req,res)=>{
   const user=await User.findOne({email:req.body.email.toLowerCase(),isDeleted:false}).select('+password').populate('role department');
   if(!user||!user.isActive||!(await user.comparePassword(req.body.password))) throw new AppError('Invalid email or password',401,'INVALID_CREDENTIALS');
-  const pair=tokens(user); user.refreshTokens.push({tokenHash:hash(pair.refreshToken),expiresAt:new Date(Date.now()+7*864e5)}); user.lastLogin=new Date(); await user.save();
+  const pair=tokens(user); user.refreshTokens = Array.isArray(user.refreshTokens) ? user.refreshTokens : []; user.refreshTokens.push({tokenHash:hash(pair.refreshToken),expiresAt:new Date(Date.now()+7*864e5)}); user.lastLogin=new Date(); await user.save();
   res.cookie('refreshToken',pair.refreshToken,{...cookieBase,maxAge:7*864e5}).json({success:true,data:{accessToken:pair.accessToken,user:user.toSafeObject()}});
 }));
 router.post('/refresh-token',asyncHandler(async(req,res)=>{
