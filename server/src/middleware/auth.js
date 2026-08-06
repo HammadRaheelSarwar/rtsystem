@@ -2,12 +2,14 @@ import jwt from 'jsonwebtoken';
 import { User, ActivityLog } from '../models/index.js';
 import { AppError, asyncHandler } from '../utils/http.js';
 
+const jwtAccessSecret = process.env.JWT_ACCESS_SECRET || 'fallback-access-secret-32-chars-long';
+
 export const protect = asyncHandler(async (req, res, next) => {
   const token = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : req.cookies?.accessToken;
   if (!token) throw new AppError('Authentication required', 401, 'UNAUTHENTICATED');
   let decoded;
   try {
-    decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+    decoded = jwt.verify(token, jwtAccessSecret);
   } catch {
     throw new AppError('Session expired or invalid', 401, 'TOKEN_INVALID');
   }

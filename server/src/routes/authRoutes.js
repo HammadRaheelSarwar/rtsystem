@@ -13,6 +13,7 @@ const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'productio
 const hash = v => crypto.createHash('sha256').update(v).digest('hex');
 const jwtAccessSecret = process.env.JWT_ACCESS_SECRET || 'fallback-access-secret-32-chars-long';
 const jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || 'fallback-refresh-secret-32-chars-long';
+let seedPromise;
 
 function tokens(user) {
   return {
@@ -21,46 +22,58 @@ function tokens(user) {
   };
 }
 
-async function ensureSeeded() {
+async function seedAccounts() {
   try {
-    const userCount = await User.countDocuments();
-    if (userCount === 0) {
-      const departments = [['Administration', 'ADMIN'], ['Sales', 'SALES'], ['Estimation', 'EST'], ['Design', 'DESIGN'], ['General Management', 'GM']];
-      const roles = {
-        ADMIN: ['users.manage', 'settings.manage', 'inquiries.all', 'reports.view'],
-        SALES: ['clients.manage', 'inquiries.create', 'itf.manage', 'sales.submit', 'followups.manage'],
-        ESTIMATION: ['inquiries.review', 'jif.manage', 'costing.manage', 'proposals.manage'],
-        DESIGN: ['design.manage', 'dws.manage', 'queries.manage'],
-        GM: ['gm.review', 'gm.approve', 'inquiries.all', 'reports.view']
-      };
+    const departments = [['Administration', 'ADMIN'], ['Sales', 'SALES'], ['Estimation', 'EST'], ['Design', 'DESIGN'], ['General Management', 'GM']];
+    const roles = {
+      ADMIN: ['users.manage', 'settings.manage', 'inquiries.all', 'reports.view'],
+      SALES: ['clients.manage', 'inquiries.create', 'itf.manage', 'sales.submit', 'followups.manage'],
+      ESTIMATION: ['inquiries.review', 'jif.manage', 'costing.manage', 'proposals.manage'],
+      DESIGN: ['design.manage', 'dws.manage', 'queries.manage'],
+      GM: ['gm.review', 'gm.approve', 'inquiries.all', 'reports.view']
+    };
 
-      const deptMap = {};
-      for (const [name, code] of departments) {
-        deptMap[code] = await Department.findOneAndUpdate({ code }, { $set: { name, code, isActive: true } }, { upsert: true, new: true });
-      }
+    const deptMap = {};
+    for (const [name, code] of departments) {
+      deptMap[code] = await Department.findOneAndUpdate({ code }, { $set: { name, code, isActive: true } }, { upsert: true, new: true });
+    }
 
-      const roleMap = {};
-      for (const [name, permissions] of Object.entries(roles)) {
-        roleMap[name] = await Role.findOneAndUpdate({ name }, { $set: { name, permissions, isActive: true } }, { upsert: true, new: true });
-      }
+    const roleMap = {};
+    for (const [name, permissions] of Object.entries(roles)) {
+      roleMap[name] = await Role.findOneAndUpdate({ name }, { $set: { name, permissions, isActive: true } }, { upsert: true, new: true });
+    }
 
-      const users = [
-        [process.env.ADMIN_NAME || 'System Administrator', process.env.ADMIN_EMAIL || 'admin@rt.com', process.env.ADMIN_PASSWORD || 'ChangeMe123!', 'ADMIN', 'ADMIN'],
-        ['Sales Executive', 'sales@rt.com', 'Sales123!', 'SALES', 'SALES'],
-        ['Estimator', 'estimation@rt.com', 'Estimate123!', 'ESTIMATION', 'EST'],
-        ['Design Engineer', 'design@rt.com', 'Design123!', 'DESIGN', 'DESIGN'],
-        ['General Manager', 'gm@rt.com', 'Manager123!', 'GM', 'GM']
-      ];
+    const users = [
+      [process.env.ADMIN_NAME || 'System Administrator', process.env.ADMIN_EMAIL || 'admin@rt.com', process.env.ADMIN_PASSWORD || 'ChangeMe123!', 'ADMIN', 'ADMIN'],
+      ['Sales Executive', 'sales@rt.com', 'Sales123!', 'SALES', 'SALES'],
+      ['Estimator', 'estimation@rt.com', 'Estimate123!', 'ESTIMATION', 'EST'],
+      ['Design Engineer', 'design@rt.com', 'Design123!', 'DESIGN', 'DESIGN'],
+      ['General Manager', 'gm@rt.com', 'Manager123!', 'GM', 'GM']
+    ];
 
-      for (const [name, email, password, role, dept] of users) {
-        if (!await User.exists({ email })) {
-          await User.create({ name, email, password, role: roleMap[role]._id, department: deptMap[dept]._id });
-        }
+    for (const [name, email, password, role, dept] of users) {
+      if (!await User.exists({ email })) {
+        await User.create({
+          name,
+          email,
+          password,
+          role: roleMap[role]._id,
+          department: deptMap[dept]._id,
+          isActive: true,
+          isDeleted: false
+        });
       }
     }
   } catch (err) {
     console.warn('Auto-seed notice:', err.message);
   }
+}
+
+function ensureSeeded() {
+  // A serverless instance may receive simultaneous login requests. Reusing one
+  // seed operation prevents duplicate in-memory roles and dangling role IDs.
+  seedPromise ??= seedAccounts();
+  return seedPromise;
 }
 
 router.post('/login', validate(z.object({ email: z.string().email(), password: z.string().min(8) })), asyncHandler(async (req, res) => {
