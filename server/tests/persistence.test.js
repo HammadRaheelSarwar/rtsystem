@@ -39,4 +39,15 @@ describe('Supabase persistence contract', () => {
     expect(row.created_by).toBe('2fe2ae3f-0b7f-4556-a16f-918a935760ad');
     expect(row.metadata).toEqual({});
   });
+
+  it('serializes populated relationship objects as UUIDs', async () => {
+    const { toDatabaseRow } = await import('../src/models/base.js');
+    const row = toDatabaseRow('DesignTask', 'design_tasks', {
+      inquiry: '949f5e01-7291-4504-9782-a7b0d2f3ea1a',
+      assignedBy: { _id: 'c6d5f92a-a9e8-4000-8000-b937e668630e', name: 'Estimator' },
+      designStatus: 'IN_PROGRESS'
+    });
+    expect(row.assigned_by).toBe('c6d5f92a-a9e8-4000-8000-b937e668630e');
+    expect(row.status).toBe('IN_PROGRESS');
+  });
 });

@@ -4,6 +4,13 @@ import { supabase } from '../config/db.js';
 import { childSchemas, prepareDocument, schemaFor } from './schema.js';
 
 const memoryStore = new Map();
+const referenceColumns = new Set([
+  'client_id', 'inquiry_id', 'department_id', 'role_id', 'current_department_id',
+  'assigned_to', 'assigned_by', 'assigned_designer', 'created_by', 'updated_by',
+  'prepared_by', 'reviewed_by', 'checked_by', 'approved_by', 'submitted_by',
+  'uploaded_by', 'recipient_id', 'user_id', 'jif_id', 'dws_id', 'design_task_id',
+  'costing_sheet_id', 'gm_review_id', 'sales_submission_id', 'previous_version'
+]);
 
 function serializable(value) {
   return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === 'function' ? undefined : item));
@@ -77,7 +84,7 @@ export function toDatabaseRow(modelName, fallbackTable, value, id = value?._id |
     if (item === undefined || typeof item === 'function') continue;
     const column = schema.columns[key];
     if (column) {
-      const normalized = column.endsWith('_id') && item && typeof item === 'object'
+      const normalized = referenceColumns.has(column) && item && typeof item === 'object'
         ? (item._id || item.id || item.Id || null)
         : item;
       row[column] = serializable(normalized);
