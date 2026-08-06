@@ -7,7 +7,7 @@ import os from 'os';
 // Vercel functions run from a read-only deployment directory. Only the system
 // temp directory is writable, so creating ./uploads while the app is imported
 // makes the entire function fail before even the health or login routes run.
-export const uploadRoot = process.env.VERCEL
+export const uploadRoot = process.env.VERCEL || process.env.NODE_ENV === 'test'
   ? path.join(os.tmpdir(), 'rtsystem-uploads')
   : path.resolve(process.env.UPLOAD_PATH || 'uploads');
 

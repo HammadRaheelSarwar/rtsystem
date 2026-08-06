@@ -12,6 +12,7 @@ import inquiryRoutes from './routes/inquiryRoutes.js';
 import workflowRoutes from './routes/workflowRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import exportRoutes from './routes/exportRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
 import {notFound,errorHandler} from './middleware/error.js';
 
 const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
@@ -42,5 +43,6 @@ app.use(['/api/inquiries', '/inquiries'], inquiryRoutes);
 app.use(['/api', '/'], workflowRoutes);
 app.use(['/api', '/'], dashboardRoutes);
 app.use(['/api', '/'], exportRoutes);
+app.use(['/api/admin', '/admin'], adminRoutes);
 app.use(notFound);
 app.use(errorHandler);
