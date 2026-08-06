@@ -1,0 +1,13 @@
+import {Router} from 'express';
+import {User,Role,Department} from '../models/index.js';
+import {protect,authorize} from '../middleware/auth.js';
+import {asyncHandler,AppError,parsePagination} from '../utils/http.js';
+const router=Router();router.use(protect,authorize('ADMIN'));
+router.get('/',asyncHandler(async(req,res)=>{const {page,limit,skip}=parsePagination(req.query);const filter={isDeleted:false};if(req.query.role)filter.role=req.query.role;if(req.query.department)filter.department=req.query.department;const [items,total]=await Promise.all([User.find(filter).populate('role department').skip(skip).limit(limit).sort({createdAt:-1}),User.countDocuments(filter)]);res.json({success:true,data:items,meta:{page,limit,total}});}));
+router.post('/',asyncHandler(async(req,res)=>{const user=await User.create(req.body);const populated=await User.findById(user._id).populate('role department');res.status(201).json({success:true,data:populated});}));
+router.get('/:id',asyncHandler(async(req,res)=>{const user=await User.findOne({_id:req.params.id,isDeleted:false}).populate('role department');if(!user)throw new AppError('User not found',404);res.json({success:true,data:user});}));
+router.put('/:id',asyncHandler(async(req,res)=>{delete req.body.password;const user=await User.findByIdAndUpdate(req.params.id,req.body,{new:true,runValidators:true}).populate('role department');if(!user)throw new AppError('User not found',404);res.json({success:true,data:user});}));
+router.patch('/:id/status',asyncHandler(async(req,res)=>{const user=await User.findByIdAndUpdate(req.params.id,{isActive:Boolean(req.body.isActive)},{new:true});if(!user)throw new AppError('User not found',404);res.json({success:true,data:user});}));
+router.delete('/:id',asyncHandler(async(req,res)=>{if(req.params.id===String(req.user._id))throw new AppError('You cannot delete your own account',409);await User.findByIdAndUpdate(req.params.id,{isDeleted:true,deletedAt:new Date(),isActive:false});res.json({success:true});}));
+export const masterRouter=Router();masterRouter.use(protect);masterRouter.get('/roles',asyncHandler(async(req,res)=>res.json({success:true,data:await Role.find({isActive:true})})));masterRouter.get('/departments',asyncHandler(async(req,res)=>res.json({success:true,data:await Department.find({isActive:true})})));
+export default router;

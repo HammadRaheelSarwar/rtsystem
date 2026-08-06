@@ -1,0 +1,2 @@
+import {Navigate,useLocation} from 'react-router-dom';import {useAuth} from '../context/AuthContext';import {Spinner} from '../components/common/UI';
+export default function ProtectedRoute({roles,children}){const {user,loading}=useAuth(),location=useLocation();if(loading)return <Spinner/>;if(!user)return <Navigate to="/login" state={{from:location}} replace/>;if(roles&&!roles.includes(user.role.name))return <Navigate to="/dashboard" replace/>;return children}

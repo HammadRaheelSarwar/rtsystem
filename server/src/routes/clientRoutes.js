@@ -1,0 +1,12 @@
+import {Router} from 'express';
+import {Client,Inquiry} from '../models/index.js';
+import {protect,authorize} from '../middleware/auth.js';
+import {asyncHandler,AppError,parsePagination} from '../utils/http.js';
+import {audit} from '../services/auditService.js';
+const router=Router();router.use(protect);
+router.get('/',asyncHandler(async(req,res)=>{const {page,limit,skip}=parsePagination(req.query);const filter={isDeleted:false};if(req.query.status)filter.status=req.query.status;if(req.query.search)filter.$text={$search:req.query.search};const [items,total]=await Promise.all([Client.find(filter).sort({createdAt:-1}).skip(skip).limit(limit),Client.countDocuments(filter)]);res.json({success:true,data:items,meta:{page,limit,total,pages:Math.ceil(total/limit)}});}));
+router.post('/',authorize('ADMIN','SALES'),asyncHandler(async(req,res)=>{const client=await Client.create({...req.body,createdBy:req.user._id});await audit(req,{action:'CREATE',entityType:'Client',entityId:client._id,newValue:client,description:`Created client ${client.companyName}`});res.status(201).json({success:true,data:client});}));
+router.get('/:id',asyncHandler(async(req,res)=>{const client=await Client.findOne({_id:req.params.id,isDeleted:false});if(!client)throw new AppError('Client not found',404);const inquiries=await Inquiry.find({client:client._id,isDeleted:false}).select('inquiryNumber projectName currentStatus finalResult revisionNumber createdAt');res.json({success:true,data:{client,inquiries}});}));
+router.put('/:id',authorize('ADMIN','SALES'),asyncHandler(async(req,res)=>{const old=await Client.findOne({_id:req.params.id,isDeleted:false});if(!old)throw new AppError('Client not found',404);const updated=await Client.findByIdAndUpdate(old._id,req.body,{new:true,runValidators:true});await audit(req,{action:'UPDATE',entityType:'Client',entityId:old._id,oldValue:old,newValue:updated});res.json({success:true,data:updated});}));
+router.delete('/:id',authorize('ADMIN'),asyncHandler(async(req,res)=>{const client=await Client.findByIdAndUpdate(req.params.id,{isDeleted:true,deletedAt:new Date(),status:'INACTIVE'},{new:true});if(!client)throw new AppError('Client not found',404);await audit(req,{action:'DELETE',entityType:'Client',entityId:client._id});res.json({success:true});}));
+export default router;
