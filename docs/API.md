@@ -28,6 +28,7 @@ Base URL: `/api`. Protected calls use `Authorization: Bearer <accessToken>`. Ref
 - Proposals: `POST/GET/PUT /inquiries/:id/{commercial-proposal|technical-proposal}` plus `/complete`
 - Drawings: `POST/GET /inquiries/:id/drawings`
 - GM: `POST/GET /inquiries/:id/gm-review`, plus `/approve`, `/request-revision`, `/reject`, `/forward-to-sales`
+- GM package exports: `GET /inquiries/:id/package/word` and `GET /inquiries/:id/package/excel` (GM/Admin only)
 - Sales: `POST/GET /inquiries/:id/client-submission`, `POST/GET /inquiries/:id/follow-ups`, `PATCH /inquiries/:id/final-status`
 - Documents: `POST/GET /inquiries/:id/documents`, `GET /documents`, `POST /documents/:id/replace`, `GET /documents/:id/{preview|download}`, `DELETE /documents/:id`
 - Dashboard/reports: `GET /dashboard`, `GET /reports/summary`, `GET /reports/analytics`

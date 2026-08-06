@@ -17,7 +17,7 @@ Audit date: 2026-08-06
 - Inquiry reports, CSV export, management analytics, query ageing, workload, quotation and margin reporting
 - Searchable administrator audit log
 - Administrator system settings, company/email/dropdown/template categories and approval rules
-- PDF proposal export and Excel DWS/costing export
+- PDF proposal export, Excel DWS/costing export, and GM-only consolidated Word/Excel package exports with complete ITF, JIF, DWS, costing, proposal and drawing data
 
 ## Partial or deployment-dependent
 
