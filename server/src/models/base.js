@@ -419,6 +419,8 @@ export class SupabaseModel {
       const snakeKey = camelToSnakeKey(k);
       if (k === '_id' || k === 'id') {
         q = q.eq('id', v);
+      } else if (k === 'isDeleted' && v === false) {
+        q = q.or('is_deleted.eq.false,is_deleted.is.null');
       } else if (typeof v === 'object' && v !== null) {
         if (v.$nin) {
           q = q.not(snakeKey, 'in', `(${v.$nin.map(x => `"${x}"`).join(',')})`);
@@ -450,6 +452,15 @@ export class SupabaseModel {
       if (k === '$text') continue;
       const itemVal = item[k];
 
+      if (k === 'isDeleted' && v === false) {
+        if (itemVal === true) return false;
+        continue;
+      }
+      if (k === 'isActive' && v === true) {
+        if (itemVal === false) return false;
+        continue;
+      }
+
       if (v && typeof v === 'object') {
         if (v.$regex) {
           const reg = new RegExp(v.$regex, 'i');
@@ -471,6 +482,9 @@ export class SupabaseModel {
         }
       } else if (itemVal !== v) {
         if ((k === '_id' || k === 'id') && String(itemVal) === String(v)) {
+          continue;
+        }
+        if (typeof itemVal === 'string' && typeof v === 'string' && itemVal.toLowerCase() === v.toLowerCase()) {
           continue;
         }
         return false;
